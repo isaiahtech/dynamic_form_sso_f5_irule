@@ -1,0 +1,59 @@
+  when HTTP_REQUEST {
+    if { [HTTP::path] ends_with "/" and [HTTP::method] equals "GET" } {
+        set workaround 1
+    } elseif { [info exists workaround] } {
+        unset workaround
+    }
+ 
+    if { [HTTP::path] ends_with "/Login.xml" and [HTTP::method] equals "POST" } {
+        set payload [HTTP::payload]
+        set clen [HTTP::header Content-Length]
+        if { $payload contains "f5-sso-token" } {
+            set password [ACCESS::session data get -secure session.sso.token.last.password]
+            set new_payload [regsub -all {f5-sso-token} $payload $password]
+            HTTP::payload replace 0 $clen $new_payload
+        }
+    }
+}
+when HTTP_RESPONSE {
+     if {[info exists workaround]} {
+        if { [HTTP::header exists "Content-Length"] and [HTTP::header "Content-Length"] <= 1048576 } {
+            HTTP::collect [HTTP::header Content-Length]
+            # log local0. "Collecting [HTTP::header Content-Length] bytes on the response."
+        } else {
+            HTTP::collect 2097152 ;# 2MB
+            # log local0. "Collecting first 2 Mbytes on the response."
+        }
+    }
+}
+ 
+ 
+ 
+when HTTP_RESPONSE_DATA {
+    if { [info exists workaround] } {
+        unset workaround
+        set location [string last "</body>" [HTTP::payload]]
+        if { $location > 0 && \
+               $location < [expr {[HTTP::payload length] - 5}]
+        } {
+        set username [ACCESS::session data get session.sso.token.last.username]
+        set newstring "<script>
+var checkExist = setInterval(function() {
+   if (document.body.contains(document.getElementById(\'user-box-text\'))) {
+      clearInterval(checkExist);
+ 
+      document.getElementById(\'user-box-text\').value = \'$username\';
+      document.getElementById(\'pword-box-text\').value = \'f5-sso-token\';
+      document.getElementById(\'btn-LoginButton\').click();
+ 
+ 
+ 
+   }
+}, 200); // check every 200ms
+</script>"
+ 
+            HTTP::payload replace $location 0 $newstring
+        }
+        unset location
+    }
+}
